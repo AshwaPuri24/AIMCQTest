@@ -1,18 +1,21 @@
 import { useEffect, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Brain, LogOut, Plus, Clock, Target, TrendingUp, Award } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import type { TestAttempt, Test } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
 
 type AttemptWithTest = TestAttempt & { test: Test };
 
 export default function Dashboard() {
   const { toast } = useToast();
   const { user, isAuthenticated, isLoading } = useAuth();
+  const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -57,8 +60,24 @@ export default function Dashboard() {
     .sort((a, b) => (new Date(b.startedAt || 0).getTime()) - (new Date(a.startedAt || 0).getTime()));
   }, [attempts, attemptsLoading]);
 
+  const logoutMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/auth/logout");
+    },
+    onSuccess: () => {
+      queryClient.clear();
+    },
+    onError: () => {
+      toast({
+        title: "Logout Failed",
+        description: "An error occurred. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleLogout = () => {
-    window.location.href = "/api/logout";
+    logoutMutation.mutate();
   };
 
   if (isLoading || !isAuthenticated) {
@@ -103,7 +122,7 @@ export default function Dashboard() {
                 {user?.firstName || user?.email?.split("@")[0] || "User"}
               </span>
             </div>
-            <Button variant="ghost" size="icon" onClick={handleLogout} data-testid="button-logout">
+            <Button variant="ghost" size="icon" onClick={handleLogout} disabled={logoutMutation.isPending} data-testid="button-logout">
               <LogOut className="h-5 w-5" />
             </Button>
           </div>

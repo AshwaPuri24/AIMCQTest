@@ -1,5 +1,5 @@
-import { sql } from 'drizzle-orm';
-import { relations } from 'drizzle-orm';
+import { sql } from "drizzle-orm";
+import { relations } from "drizzle-orm";
 import {
   index,
   jsonb,
@@ -21,13 +21,16 @@ export const sessions = pgTable(
     sess: jsonb("sess").notNull(),
     expire: timestamp("expire").notNull(),
   },
-  (table) => [index("IDX_session_expire").on(table.expire)],
+  (table) => [index("IDX_session_expire").on(table.expire)]
 );
 
 // User storage table for Replit Auth
 export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: varchar("email").unique(),
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  email: varchar("email").unique().notNull(),
+  hashedPassword: varchar("hashed_password").notNull(),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
@@ -37,8 +40,12 @@ export const users = pgTable("users", {
 
 // Tests table - stores generated tests
 export const tests = pgTable("tests", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   company: text("company"),
   subject: text("subject").notNull(),
@@ -50,8 +57,12 @@ export const tests = pgTable("tests", {
 
 // Questions table - stores individual questions for each test
 export const questions = pgTable("questions", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  testId: varchar("test_id").notNull().references(() => tests.id, { onDelete: 'cascade' }),
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  testId: varchar("test_id")
+    .notNull()
+    .references(() => tests.id, { onDelete: "cascade" }),
   questionNumber: integer("question_number").notNull(),
   questionText: text("question_text").notNull(),
   options: jsonb("options").notNull().$type<string[]>(),
@@ -61,9 +72,15 @@ export const questions = pgTable("questions", {
 
 // Test attempts table - tracks when users take tests
 export const testAttempts = pgTable("test_attempts", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  testId: varchar("test_id").notNull().references(() => tests.id, { onDelete: 'cascade' }),
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  testId: varchar("test_id")
+    .notNull()
+    .references(() => tests.id, { onDelete: "cascade" }),
   startedAt: timestamp("started_at").defaultNow(),
   completedAt: timestamp("completed_at"),
   score: integer("score"),
@@ -74,9 +91,15 @@ export const testAttempts = pgTable("test_attempts", {
 
 // User answers table - stores answers for each question in an attempt
 export const userAnswers = pgTable("user_answers", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  attemptId: varchar("attempt_id").notNull().references(() => testAttempts.id, { onDelete: 'cascade' }),
-  questionId: varchar("question_id").notNull().references(() => questions.id, { onDelete: 'cascade' }),
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  attemptId: varchar("attempt_id")
+    .notNull()
+    .references(() => testAttempts.id, { onDelete: "cascade" }),
+  questionId: varchar("question_id")
+    .notNull()
+    .references(() => questions.id, { onDelete: "cascade" }),
   selectedAnswer: integer("selected_answer"), // 0-3 index, null if not answered
   isCorrect: boolean("is_correct"),
 });
@@ -104,17 +127,20 @@ export const questionsRelations = relations(questions, ({ one, many }) => ({
   userAnswers: many(userAnswers),
 }));
 
-export const testAttemptsRelations = relations(testAttempts, ({ one, many }) => ({
-  user: one(users, {
-    fields: [testAttempts.userId],
-    references: [users.id],
-  }),
-  test: one(tests, {
-    fields: [testAttempts.testId],
-    references: [tests.id],
-  }),
-  userAnswers: many(userAnswers),
-}));
+export const testAttemptsRelations = relations(
+  testAttempts,
+  ({ one, many }) => ({
+    user: one(users, {
+      fields: [testAttempts.userId],
+      references: [users.id],
+    }),
+    test: one(tests, {
+      fields: [testAttempts.testId],
+      references: [tests.id],
+    }),
+    userAnswers: many(userAnswers),
+  })
+);
 
 export const userAnswersRelations = relations(userAnswers, ({ one }) => ({
   attempt: one(testAttempts, {
@@ -134,8 +160,6 @@ export type User = typeof users.$inferSelect;
 export const insertTestSchema = createInsertSchema(tests).omit({
   id: true,
   createdAt: true,
-}).extend({
-  numberOfQuestions: z.number().min(5).max(50),
 });
 
 export type InsertTest = z.infer<typeof insertTestSchema>;
