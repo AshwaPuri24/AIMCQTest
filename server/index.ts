@@ -6,7 +6,7 @@ import { sessionMiddleware } from "./auth";
 
 const app = express();
 
-app.set("trust proxy", 1); // Trust first proxy (needed for secure cookies in prod)
+app.set("trust proxy", 1); // Trust first proxy
 app.use(sessionMiddleware);
 app.use(passport.initialize());
 app.use(passport.session());

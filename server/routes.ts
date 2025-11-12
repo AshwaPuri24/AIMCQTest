@@ -309,8 +309,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!test) {
           return res.status(404).json({ message: "Test not found" });
         }
-        // Note: We don't check test.userId === userId, allowing users to re-attempt a test
-        // even if the original test was somehow created by another user (e.g., public tests later)
 
         const attempt = await storage.createTestAttempt({
           userId,

@@ -65,7 +65,6 @@ passport.serializeUser((user: any, done) => {
   done(null, user.id);
 });
 
-// This tells Passport how to retrieve the user from the session
 passport.deserializeUser(async (id: string, done) => {
   try {
     const user = await storage.getUser(id);
