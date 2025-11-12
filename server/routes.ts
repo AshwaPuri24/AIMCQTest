@@ -1,38 +1,94 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { generateMCQTest } from "./openai";
+import { generateMCQTest, type MCQQuestion } from "./openai";
 import { z } from "zod";
-
-const MOCK_USER_ID = "local-dev-user-001";
-const MOCK_USER = {
-  id: MOCK_USER_ID,
-  email: "dev@example.com",
-  firstName: "Local",
-  lastName: "Developer",
-  profileImageUrl: "",
-  // createdAt: new Date().toISOString(),
-  // updatedAt: new Date().toISOString(),
-};
+import passport from "passport";
+import bcrypt from "bcryptjs";
+import { isAuthenticated } from "./auth"; // Our new middleware
+import { InsertUserAnswer } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-
-  app.get('/api/auth/user', async (req: any, res) => {
+  // --- NEW AUTHENTICATION ROUTES ---
+  app.post("/api/auth/register", async (req, res, next) => {
     try {
+      const { email, password, firstName, lastName } = req.body;
+      if (!email || !password || !firstName) {
+        return res
+          .status(400)
+          .json({ message: "Email, password, and first name are required." });
+      }
 
-      await storage.upsertUser(MOCK_USER);
-      res.json(MOCK_USER);
+      const existingUser = await storage.getUserByEmail(email.toLowerCase());
+      if (existingUser) {
+        return res
+          .status(400)
+          .json({ message: "An account with this email already exists." });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const user = await storage.upsertUser({
+        id: undefined,
+        email: email.toLowerCase(),
+        hashedPassword,
+        firstName,
+        lastName,
+      });
+
+      // Log the user in immediately after registration
+      req.login(user, (err) => {
+        if (err) {
+          return next(err);
+        }
+        const { hashedPassword, ...userWithoutPassword } = user;
+        res.json(userWithoutPassword);
+      });
     } catch (error) {
-      console.error("Error fetching/upserting mock user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
+      console.error("Error in /api/auth/register:", error);
+      next(error);
     }
   });
 
-  app.post("/api/tests/generate", async (req: any, res) => {
-    try {
-      const userId = MOCK_USER_ID;
+  app.post(
+    "/api/auth/login",
+    passport.authenticate("local"),
+    (req: any, res) => {
+      res.json(req.user);
+    }
+  );
 
-      // Validate request body
+  app.post("/api/auth/logout", (req, res, next) => {
+    req.logout((err) => {
+      if (err) {
+        return next(err);
+      }
+      req.session.destroy((destroyErr) => {
+        if (destroyErr) {
+          return next(destroyErr);
+        }
+        res.clearCookie("connect.sid"); // Clear the session cookie
+        res.json({ message: "Logged out successfully" });
+      });
+    });
+  });
+
+  // Get current user
+  app.get("/api/auth/user", (req: any, res) => {
+    if (req.isAuthenticated()) {
+      res.json(req.user);
+    } else {
+      res.status(401).json(null); // Return null if not authenticated
+    }
+  });
+  // --- END OF AUTH ROUTES ---
+
+  // --- PROTECTED API ROUTES ---
+
+  app.post("/api/tests/generate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id; // <-- Use real user ID
+
       const schema = z.object({
         company: z.string().optional(),
         subject: z.string().min(1),
@@ -40,16 +96,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         numberOfQuestions: z.number().min(5).max(50),
         context: z.string().optional(),
       });
-
       const data = schema.parse(req.body);
 
-      // Generate questions using OpenAI
       const generatedQuestions = await generateMCQTest(data);
-
-      // Create test in database
       const test = await storage.createTest({
-        userId, // Uses MOCK_USER_ID
-        title: `${data.subject} - ${data.difficulty} ${data.company ? `(${data.company})` : ""}`,
+        userId,
+        title: `${data.subject} - ${data.difficulty} ${
+          data.company ? `(${data.company})` : ""
+        }`,
         company: data.company,
         subject: data.subject,
         difficulty: data.difficulty,
@@ -57,21 +111,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         totalQuestions: data.numberOfQuestions,
       });
 
-      // Create questions
-      const questionsData = generatedQuestions.map((q) => ({
+      const questionsData = generatedQuestions.map((q: MCQQuestion) => ({
         testId: test.id,
         questionNumber: q.questionNumber,
         questionText: q.questionText,
-        options: q.options,
+        options: Array.from(q.options),
         correctAnswer: q.correctAnswer,
         reasoning: q.reasoning,
       }));
-
       await storage.createQuestions(questionsData);
 
-      // Create test attempt
       const attempt = await storage.createTestAttempt({
-        userId, // Uses MOCK_USER_ID
+        userId, // <-- Uses real user ID
         testId: test.id,
       });
 
@@ -82,161 +133,138 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error generating test:", error);
-      res.status(500).json({ message: error.message || "Failed to generate test" });
+      res
+        .status(500)
+        .json({ message: error.message || "Failed to generate test" });
     }
   });
 
-  // Create a new attempt for an existing test (Re-attempt)
-  app.post("/api/tests/:testId/reattempt", async (req: any, res) => {
-    try {
-      const userId = MOCK_USER_ID;
-      const { testId } = req.params;
+  app.get(
+    "/api/attempts/:attemptId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { attemptId } = req.params;
 
-      // 1. Verify the test exists
-      const test = await storage.getTest(testId);
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+        if (attempt.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+
+        const test = await storage.getTest(attempt.testId);
+        if (!test) {
+          return res.status(404).json({ message: "Test not found" });
+        }
+
+        const questions = await storage.getQuestionsByTestId(test.id);
+
+        res.json({
+          attemptId: attempt.id,
+          testTitle: test.title,
+          questions,
+          startedAt: attempt.startedAt,
+        });
+      } catch (error) {
+        console.error("Error fetching test attempt:", error);
+        res.status(500).json({ message: "Failed to fetch test attempt" });
       }
-
-      // 2. Create a new test attempt
-      const attempt = await storage.createTestAttempt({
-        userId,
-        testId: test.id,
-      });
-
-      // 3. Return the new attempt ID
-      res.json({
-        attemptId: attempt.id,
-        message: "New attempt created successfully",
-      });
-
-    } catch (error: any) {
-      console.error("Error creating re-attempt:", error);
-      res.status(500).json({ message: error.message || "Failed to create re-attempt" });
     }
-  });
-  
-  // Get test attempt with questions
-  app.get("/api/attempts/:attemptId", /* isAuthenticated, */ async (req: any, res) => {
-    try {
-      // const userId = req.user.claims.sub; // OLD
-      const userId = MOCK_USER_ID; // NEW
-      const { attemptId } = req.params;
+  );
 
-      const attempt = await storage.getTestAttempt(attemptId);
-      if (!attempt) {
-        return res.status(404).json({ message: "Test attempt not found" });
-      }
+  app.post(
+    "/api/attempts/:attemptId/submit",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { attemptId } = req.params;
+        const schema = z.object({
+          answers: z.array(
+            z.object({
+              questionId: z.string(),
+              selectedAnswer: z.number().min(0).max(3).nullable(),
+            })
+          ),
+          timeTaken: z.number(),
+        });
+        const { answers, timeTaken } = schema.parse(req.body);
 
-      // Verify ownership (this check still works, but with the mock user)
-      if (attempt.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+        if (attempt.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+        if (attempt.completedAt) {
+          return res.status(400).json({ message: "Test already submitted" });
+        }
 
-      const test = await storage.getTest(attempt.testId);
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
-      }
+        const questions = await storage.getQuestionsByTestId(attempt.testId);
+        const questionMap = new Map(questions.map((q) => [q.id, q]));
+        let correctCount = 0;
+        const userAnswersData: InsertUserAnswer[] = answers.map((answer) => {
+          const question = questionMap.get(answer.questionId);
+          let isCorrect = false;
 
-      const questions = await storage.getQuestionsByTestId(test.id);
+          if (question && answer.selectedAnswer !== null) {
+            isCorrect = question.correctAnswer === answer.selectedAnswer;
+            if (isCorrect) {
+              correctCount++;
+            }
+          }
 
-      res.json({
-        attemptId: attempt.id,
-        testTitle: test.title,
-        questions,
-        startedAt: attempt.startedAt,
-      });
-    } catch (error) {
-      console.error("Error fetching test attempt:", error);
-      res.status(500).json({ message: "Failed to fetch test attempt" });
-    }
-  });
+          return {
+            attemptId,
+            questionId: answer.questionId,
+            selectedAnswer: answer.selectedAnswer,
+            isCorrect, // This field is now correctly defined
+          };
+        });
 
-  // Submit test answers
-  app.post("/api/attempts/:attemptId/submit", /* isAuthenticated, */ async (req: any, res) => {
-    try {
-      // const userId = req.user.claims.sub; // OLD
-      const userId = MOCK_USER_ID; // NEW
-      const { attemptId } = req.params;
+        await storage.createUserAnswers(userAnswersData);
 
-      const schema = z.object({
-        answers: z.array(z.object({
-          questionId: z.string(),
-          selectedAnswer: z.number().min(0).max(3).nullable(),
-        })),
-        timeTaken: z.number(),
-      });
+        // Calculate percentage and grade
+        const totalQuestions = questions.length;
+        const percentage = Math.round((correctCount / totalQuestions) * 100);
 
-      const { answers, timeTaken } = schema.parse(req.body);
+        let grade = "F";
+        if (percentage >= 90) grade = "A";
+        else if (percentage >= 80) grade = "B";
+        else if (percentage >= 70) grade = "C";
+        else if (percentage >= 60) grade = "D";
 
-      const attempt = await storage.getTestAttempt(attemptId);
-      if (!attempt) {
-        return res.status(404).json({ message: "Test attempt not found" });
-      }
+        await storage.updateTestAttempt(attemptId, {
+          completedAt: new Date(),
+          score: correctCount,
+          percentage,
+          grade,
+          timeTaken,
+        });
 
-      // Verify ownership
-      if (attempt.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-
-      // Get all questions for the test
-      const questions = await storage.getQuestionsByTestId(attempt.testId);
-      const questionMap = new Map(questions.map(q => [q.id, q]));
-
-      // Calculate score and create user answers
-      let correctCount = 0;
-      const userAnswersData = answers.map((answer) => {
-        const question = questionMap.get(answer.questionId);
-        const isCorrect = question && answer.selectedAnswer === question.correctAnswer;
-        if (isCorrect) correctCount++;
-
-        return {
+        res.json({
+          message: "Test submitted successfully",
           attemptId,
-          questionId: answer.questionId,
-          selectedAnswer: answer.selectedAnswer,
-          isCorrect: isCorrect || false,
-        };
-      });
-
-      await storage.createUserAnswers(userAnswersData);
-
-      // Calculate percentage and grade
-      const percentage = Math.round((correctCount / questions.length) * 100);
-      const grade = 
-        percentage >= 90 ? "A+" :
-        percentage >= 85 ? "A" :
-        percentage >= 80 ? "B+" :
-        percentage >= 75 ? "B" :
-        percentage >= 70 ? "C+" :
-        percentage >= 65 ? "C" :
-        percentage >= 60 ? "D" : "F";
-
-      // Update test attempt
-      await storage.updateTestAttempt(attemptId, {
-        completedAt: new Date(),
-        score: correctCount,
-        percentage,
-        grade,
-        timeTaken,
-      });
-
-      res.json({
-        message: "Test submitted successfully",
-        score: correctCount,
-        percentage,
-        grade,
-      });
-    } catch (error: any) {
-      console.error("Error submitting test:", error);
-      res.status(500).json({ message: error.message || "Failed to submit test" });
+          score: correctCount,
+          percentage,
+          grade,
+        });
+      } catch (error: any) {
+        console.error("Error submitting test:", error);
+        res
+          .status(500)
+          .json({ message: error.message || "Failed to submit test" });
+      }
     }
-  });
+  );
 
-  // Get user's test attempts
-  app.get("/api/attempts", /* isAuthenticated, */ async (req: any, res) => {
+  app.get("/api/attempts", isAuthenticated, async (req: any, res) => {
     try {
-      // const userId = req.user.claims.sub; // OLD
-      const userId = MOCK_USER_ID; // NEW
+      const userId = req.user.id;
       const attempts = await storage.getUserAttempts(userId);
       res.json(attempts);
     } catch (error) {
@@ -245,29 +273,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get test results with details
-  app.get("/api/attempts/:attemptId/results", /* isAuthenticated, */ async (req: any, res) => {
-    try {
-      // const userId = req.user.claims.sub; // OLD
-      const userId = MOCK_USER_ID; // NEW
-      const { attemptId } = req.params;
+  app.get(
+    "/api/attempts/:attemptId/results",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { attemptId } = req.params;
 
-      const result = await storage.getAttemptWithDetails(attemptId);
-      if (!result) {
-        return res.status(404).json({ message: "Test results not found" });
+        const result = await storage.getAttemptWithDetails(attemptId);
+        if (!result) {
+          return res.status(404).json({ message: "Test results not found" });
+        }
+        if (result.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+
+        res.json(result);
+      } catch (error) {
+        console.error("Error fetching results:", error);
+        res.status(500).json({ message: "Failed to fetch test results" });
       }
-
-      // Verify ownership
-      if (result.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-
-      res.json(result);
-    } catch (error) {
-      console.error("Error fetching results:", error);
-      res.status(500).json({ message: "Failed to fetch test results" });
     }
-  });
+  );
+
+  app.post(
+    "/api/tests/:testId/reattempt",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { testId } = req.params;
+
+        const test = await storage.getTest(testId);
+        if (!test) {
+          return res.status(404).json({ message: "Test not found" });
+        }
+        // Note: We don't check test.userId === userId, allowing users to re-attempt a test
+        // even if the original test was somehow created by another user (e.g., public tests later)
+
+        const attempt = await storage.createTestAttempt({
+          userId,
+          testId: test.id,
+        });
+
+        res.json({
+          attemptId: attempt.id,
+          message: "New attempt created successfully",
+        });
+      } catch (error: any) {
+        console.error("Error creating re-attempt:", error);
+        res
+          .status(500)
+          .json({ message: error.message || "Failed to create re-attempt" });
+      }
+    }
+  );
 
   const httpServer = createServer(app);
   return httpServer;

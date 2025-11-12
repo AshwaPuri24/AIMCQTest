@@ -1,11 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Brain, Target, Zap, TrendingUp, BookOpen, Award, ArrowRight, CheckCircle2 } from "lucide-react";
+import { Link } from "wouter";
 
 export default function Landing() {
-  const handleLogin = () => {
-    window.location.href = "/api/login";
-  };
+  // const handleLogin = () => {
+  //   window.location.href = "/api/login";
+  // };
 
   return (
     <div className="min-h-screen bg-background">
@@ -18,9 +19,11 @@ export default function Landing() {
             </div>
             <span className="text-xl font-bold">TestAI</span>
           </div>
-          <Button onClick={handleLogin} data-testid="button-login">
-            Sign In
-          </Button>
+          <Link href="/login">
+            <Button data-testid="button-login">
+              Sign In
+            </Button>
+          </Link>
         </div>
       </header>
 
@@ -39,10 +42,12 @@ export default function Landing() {
               </p>
             </div>
             <div className="flex flex-col gap-4 sm:flex-row">
-              <Button size="lg" onClick={handleLogin} className="text-base" data-testid="button-get-started">
-                Get Started Free
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
+              <Link href="/register">
+                <Button size="lg" className="text-base" data-testid="button-get-started">
+                  Get Started Free
+                  <ArrowRight className="ml-2 h-5 w-5" />
+                </Button>
+              </Link>
               <Button size="lg" variant="outline" className="text-base" data-testid="button-learn-more">
                 Learn More
               </Button>
@@ -224,16 +229,17 @@ export default function Landing() {
           <p className="text-xl text-primary-foreground/90 max-w-2xl mx-auto">
             Join thousands of successful candidates who prepared with AI-powered practice tests
           </p>
-          <Button 
-            size="lg" 
-            variant="secondary" 
-            onClick={handleLogin}
-            className="text-base"
-            data-testid="button-cta-start"
-          >
-            Start Practicing Now
-            <ArrowRight className="ml-2 h-5 w-5" />
-          </Button>
+          <Link href="/register">
+            <Button 
+              size="lg" 
+              variant="secondary" 
+              className="text-base"
+              data-testid="button-cta-start"
+            >
+              Start Practicing Now
+              <ArrowRight className="ml-2 h-5 w-5" />
+            </Button>
+          </Link>
         </div>
       </section>
 

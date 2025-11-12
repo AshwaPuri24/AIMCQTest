@@ -1,4 +1,3 @@
-
 import {
   users,
   tests,
@@ -24,6 +23,7 @@ import { eq, desc, and } from "drizzle-orm";
 export interface IStorage {
   // User operations
   getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
 
   // Test operations
@@ -39,7 +39,10 @@ export interface IStorage {
   // Test attempt operations
   createTestAttempt(attempt: InsertTestAttempt): Promise<TestAttempt>;
   getTestAttempt(id: string): Promise<TestAttempt | undefined>;
-  updateTestAttempt(id: string, data: Partial<TestAttempt>): Promise<TestAttempt>;
+  updateTestAttempt(
+    id: string,
+    data: Partial<TestAttempt>
+  ): Promise<TestAttempt>;
   getUserAttempts(userId: string): Promise<(TestAttempt & { test: Test })[]>;
   getAttemptWithDetails(id: string): Promise<AttemptWithDetails | undefined>;
 
@@ -55,8 +58,13 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
   async upsertUser(userData: UpsertUser): Promise<User> {
-    const {id, ...updateData } = userData;
+    const { id, ...updateData } = userData;
     const [user] = await db
       .insert(users)
       .values(userData)
@@ -73,10 +81,7 @@ export class DatabaseStorage implements IStorage {
 
   // Test operations
   async createTest(testData: InsertTest): Promise<Test> {
-    const [test] = await db
-      .insert(tests)
-      .values(testData)
-      .returning();
+    const [test] = await db.insert(tests).values(testData).returning();
     return test;
   }
 
@@ -85,7 +90,9 @@ export class DatabaseStorage implements IStorage {
     return test;
   }
 
-  async getTestWithQuestions(id: string): Promise<TestWithQuestions | undefined> {
+  async getTestWithQuestions(
+    id: string
+  ): Promise<TestWithQuestions | undefined> {
     const [test] = await db.select().from(tests).where(eq(tests.id, id));
     if (!test) return undefined;
 
@@ -112,10 +119,7 @@ export class DatabaseStorage implements IStorage {
   // Question operations
   async createQuestions(questionsData: InsertQuestion[]): Promise<Question[]> {
     if (questionsData.length === 0) return [];
-    return await db
-      .insert(questions)
-      .values(questionsData)
-      .returning();
+    return await db.insert(questions).values(questionsData).returning();
   }
 
   async getQuestionsByTestId(testId: string): Promise<Question[]> {
@@ -127,7 +131,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Test attempt operations
-  async createTestAttempt(attemptData: InsertTestAttempt): Promise<TestAttempt> {
+  async createTestAttempt(
+    attemptData: InsertTestAttempt
+  ): Promise<TestAttempt> {
     const [attempt] = await db
       .insert(testAttempts)
       .values(attemptData)
@@ -143,7 +149,10 @@ export class DatabaseStorage implements IStorage {
     return attempt;
   }
 
-  async updateTestAttempt(id: string, data: Partial<TestAttempt>): Promise<TestAttempt> {
+  async updateTestAttempt(
+    id: string,
+    data: Partial<TestAttempt>
+  ): Promise<TestAttempt> {
     const [attempt] = await db
       .update(testAttempts)
       .set(data)
@@ -152,7 +161,9 @@ export class DatabaseStorage implements IStorage {
     return attempt;
   }
 
-  async getUserAttempts(userId: string): Promise<(TestAttempt & { test: Test })[]> {
+  async getUserAttempts(
+    userId: string
+  ): Promise<(TestAttempt & { test: Test })[]> {
     const attempts = await db
       .select({
         attempt: testAttempts,
@@ -163,13 +174,15 @@ export class DatabaseStorage implements IStorage {
       .where(eq(testAttempts.userId, userId))
       .orderBy(desc(testAttempts.startedAt));
 
-    return attempts.map(row => ({
+    return attempts.map((row) => ({
       ...row.attempt,
       test: row.test,
     }));
   }
 
-  async getAttemptWithDetails(id: string): Promise<AttemptWithDetails | undefined> {
+  async getAttemptWithDetails(
+    id: string
+  ): Promise<AttemptWithDetails | undefined> {
     const [attempt] = await db
       .select()
       .from(testAttempts)
@@ -197,7 +210,7 @@ export class DatabaseStorage implements IStorage {
     return {
       ...attempt,
       test,
-      userAnswers: answers.map(row => ({
+      userAnswers: answers.map((row) => ({
         ...row.answer,
         question: row.question,
       })),
@@ -205,12 +218,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // User answer operations
-  async createUserAnswers(answersData: InsertUserAnswer[]): Promise<UserAnswer[]> {
+  async createUserAnswers(
+    answersData: InsertUserAnswer[]
+  ): Promise<UserAnswer[]> {
     if (answersData.length === 0) return [];
-    return await db
-      .insert(userAnswers)
-      .values(answersData)
-      .returning();
+    return await db.insert(userAnswers).values(answersData).returning();
   }
 
   async getUserAnswersByAttempt(attemptId: string): Promise<UserAnswer[]> {

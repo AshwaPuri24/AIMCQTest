@@ -9,14 +9,8 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-// Use a standard pg Pool
 export const pool = new Pool({ 
   connectionString: process.env.DATABASE_URL,
-  // You may need this if you're using a self-signed cert in dev,
-  // but for a standard local install, it's usually not needed.
-  // ssl: {
-  //   rejectUnauthorized: false, 
-  // },
 });
 
 export const db = drizzle(pool, { schema });
