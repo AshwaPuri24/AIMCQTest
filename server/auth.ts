@@ -87,3 +87,5 @@ export const isAuthenticated = (req: any, res: any, next: any) => {
   }
   res.status(401).json({ message: "Unauthorized" });
 };
+
+export default {};
