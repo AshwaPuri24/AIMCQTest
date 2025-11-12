@@ -2,15 +2,11 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { generateMCQTest, type MCQQuestion } from "./openai";
-import { generateMCQTest, type MCQQuestion } from "./openai";
 import { z } from "zod";
-import passport from "passport";
-import bcrypt from "bcryptjs";
 import { isAuthenticated } from "./auth"; // Our new middleware
 import { InsertUserAnswer } from "@shared/schema";
 import passport from "passport";
 import bcrypt from "bcryptjs";
-import { isAuthenticated } from "./auth"; // Our new middleware
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // --- NEW AUTHENTICATION ROUTES ---
@@ -48,41 +44,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { hashedPassword, ...userWithoutPassword } = user;
         res.json(userWithoutPassword);
       });
-  // --- NEW AUTHENTICATION ROUTES ---
-  app.post("/api/auth/register", async (req, res, next) => {
-    try {
-      const { email, password, firstName, lastName } = req.body;
-      if (!email || !password || !firstName) {
-        return res
-          .status(400)
-          .json({ message: "Email, password, and first name are required." });
-      }
-
-      const existingUser = await storage.getUserByEmail(email.toLowerCase());
-      if (existingUser) {
-        return res
-          .status(400)
-          .json({ message: "An account with this email already exists." });
-      }
-
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      const user = await storage.upsertUser({
-        id: undefined,
-        email: email.toLowerCase(),
-        hashedPassword,
-        firstName,
-        lastName,
-      });
-
-      // Log the user in immediately after registration
-      req.login(user, (err) => {
-        if (err) {
-          return next(err);
-        }
-        const { hashedPassword, ...userWithoutPassword } = user;
-        res.json(userWithoutPassword);
-      });
     } catch (error) {
       console.error("Error in /api/auth/register:", error);
       next(error);
@@ -98,51 +59,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   app.post("/api/auth/logout", (req, res, next) => {
-    req.logout((err) => {
+    req.logout((err: any) => {
       if (err) {
         return next(err);
       }
-      req.session.destroy((destroyErr) => {
-        if (destroyErr) {
-          return next(destroyErr);
-        }
-        res.clearCookie("connect.sid"); // Clear the session cookie
+      // Only destroy session if it exists
+      const session = (req as any).session;
+      if (session && typeof session.destroy === "function") {
+        session.destroy((destroyErr: any) => {
+          if (destroyErr) {
+            return next(destroyErr);
+          }
+          res.clearCookie("connect.sid"); // Clear the session cookie
+          res.json({ message: "Logged out successfully" });
+        });
+      } else {
+        res.clearCookie("connect.sid");
         res.json({ message: "Logged out successfully" });
-      });
-    });
-  });
-
-  // Get current user
-  app.get("/api/auth/user", (req: any, res) => {
-    if (req.isAuthenticated()) {
-      res.json(req.user);
-    } else {
-      res.status(401).json(null); // Return null if not authenticated
-      console.error("Error in /api/auth/register:", error);
-      next(error);
-    }
-  });
-
-  app.post(
-    "/api/auth/login",
-    passport.authenticate("local"),
-    (req: any, res) => {
-      res.json(req.user);
-    }
-  );
-
-  app.post("/api/auth/logout", (req, res, next) => {
-    req.logout((err) => {
-      if (err) {
-        return next(err);
       }
-      req.session.destroy((destroyErr) => {
-        if (destroyErr) {
-          return next(destroyErr);
-        }
-        res.clearCookie("connect.sid"); // Clear the session cookie
-        res.json({ message: "Logged out successfully" });
-      });
     });
   });
 
@@ -154,19 +88,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(401).json(null); // Return null if not authenticated
     }
   });
-  // --- END OF AUTH ROUTES ---
 
-  // --- PROTECTED API ROUTES ---
-  // --- END OF AUTH ROUTES ---
-
-  // --- PROTECTED API ROUTES ---
-
-  app.post("/api/tests/generate", isAuthenticated, async (req: any, res) => {
   app.post("/api/tests/generate", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.id; // <-- Use real user ID
-
-      const userId = req.user.id; // <-- Use real user ID
+      const userId = req.user.id;
 
       const schema = z.object({
         company: z.string().optional(),
@@ -183,10 +108,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         title: `${data.subject} - ${data.difficulty} ${
           data.company ? `(${data.company})` : ""
         }`,
-        userId,
-        title: `${data.subject} - ${data.difficulty} ${
-          data.company ? `(${data.company})` : ""
-        }`,
         company: data.company,
         subject: data.subject,
         difficulty: data.difficulty,
@@ -195,20 +116,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const questionsData = generatedQuestions.map((q: MCQQuestion) => ({
-      const questionsData = generatedQuestions.map((q: MCQQuestion) => ({
         testId: test.id,
         questionNumber: q.questionNumber,
         questionText: q.questionText,
-        options: Array.from(q.options),
-        options: q.options as string[],
+        options: Array.isArray(q.options)
+          ? q.options.map(String)
+          : Array.from(q.options, String),
         correctAnswer: q.correctAnswer,
         reasoning: q.reasoning,
       }));
       await storage.createQuestions(questionsData);
 
       const attempt = await storage.createTestAttempt({
-        userId, // <-- Uses real user ID
-        userId, // <-- Uses real user ID
+        userId,
         testId: test.id,
       });
 
@@ -219,9 +139,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error generating test:", error);
-      res
-        .status(500)
-        .json({ message: error.message || "Failed to generate test" });
       res
         .status(500)
         .json({ message: error.message || "Failed to generate test" });
@@ -236,21 +153,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const userId = req.user.id;
         const { attemptId } = req.params;
 
-  app.get(
-    "/api/attempts/:attemptId",
-    isAuthenticated,
-    async (req: any, res) => {
-      try {
-        const userId = req.user.id;
-        const { attemptId } = req.params;
-
-        const attempt = await storage.getTestAttempt(attemptId);
-        if (!attempt) {
-          return res.status(404).json({ message: "Test attempt not found" });
-        }
-        if (attempt.userId !== userId) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
         const attempt = await storage.getTestAttempt(attemptId);
         if (!attempt) {
           return res.status(404).json({ message: "Test attempt not found" });
@@ -263,12 +165,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!test) {
           return res.status(404).json({ message: "Test not found" });
         }
-        const test = await storage.getTest(attempt.testId);
-        if (!test) {
-          return res.status(404).json({ message: "Test not found" });
-        }
 
-        const questions = await storage.getQuestionsByTestId(test.id);
         const questions = await storage.getQuestionsByTestId(test.id);
 
         res.json({
@@ -283,36 +180,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
   );
-        res.json({
-          attemptId: attempt.id,
-          testTitle: test.title,
-          questions,
-          startedAt: attempt.startedAt,
-        });
-      } catch (error) {
-        console.error("Error fetching test attempt:", error);
-        res.status(500).json({ message: "Failed to fetch test attempt" });
-      }
-    }
-  );
 
-  app.post(
-    "/api/attempts/:attemptId/submit",
-    isAuthenticated,
-    async (req: any, res) => {
-      try {
-        const userId = req.user.id;
-        const { attemptId } = req.params;
-        const schema = z.object({
-          answers: z.array(
-            z.object({
-              questionId: z.string(),
-              selectedAnswer: z.number().min(0).max(3).nullable(),
-            })
-          ),
-          timeTaken: z.number(),
-        });
-        const { answers, timeTaken } = schema.parse(req.body);
   app.post(
     "/api/attempts/:attemptId/submit",
     isAuthenticated,
@@ -341,13 +209,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (attempt.completedAt) {
           return res.status(400).json({ message: "Test already submitted" });
         }
-        const attempt = await storage.getTestAttempt(attemptId);
-        if (!attempt) {
-          return res.status(404).json({ message: "Test attempt not found" });
-        }
-        if (attempt.userId !== userId) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
 
         const questions = await storage.getQuestionsByTestId(attempt.testId);
         const questionMap = new Map(questions.map((q) => [q.id, q]));
@@ -367,7 +228,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             attemptId,
             questionId: answer.questionId,
             selectedAnswer: answer.selectedAnswer,
-            isCorrect, // This field is now correctly defined
+            isCorrect,
           };
         });
 
@@ -404,32 +265,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .status(500)
           .json({ message: error.message || "Failed to submit test" });
       }
-        // ... (rest of submit logic is fine)
-        const questions = await storage.getQuestionsByTestId(attempt.testId);
-        // ...
-        await storage.createUserAnswers(userAnswersData);
-        // ...
-        await storage.updateTestAttempt(attemptId, {
-          // ...
-        });
-        res.json({
-          message: "Test submitted successfully",
-          // ...
-        });
-      } catch (error: any) {
-        console.error("Error submitting test:", error);
-        res
-          .status(500)
-          .json({ message: error.message || "Failed to submit test" });
-      }
     }
-  );
   );
 
   app.get("/api/attempts", isAuthenticated, async (req: any, res) => {
-  app.get("/api/attempts", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.id;
       const userId = req.user.id;
       const attempts = await storage.getUserAttempts(userId);
       res.json(attempts);
@@ -446,13 +286,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const userId = req.user.id;
         const { attemptId } = req.params;
-  app.get(
-    "/api/attempts/:attemptId/results",
-    isAuthenticated,
-    async (req: any, res) => {
-      try {
-        const userId = req.user.id;
-        const { attemptId } = req.params;
 
         const result = await storage.getAttemptWithDetails(attemptId);
         if (!result) {
@@ -461,52 +294,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (result.userId !== userId) {
           return res.status(403).json({ message: "Forbidden" });
         }
-        const result = await storage.getAttemptWithDetails(attemptId);
-        if (!result) {
-          return res.status(404).json({ message: "Test results not found" });
-        }
-        if (result.userId !== userId) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
 
-        res.json(result);
-      } catch (error) {
-        console.error("Error fetching results:", error);
-        res.status(500).json({ message: "Failed to fetch test results" });
-      }
-    }
-  );
-
-  app.post(
-    "/api/tests/:testId/reattempt",
-    isAuthenticated,
-    async (req: any, res) => {
-      try {
-        const userId = req.user.id;
-        const { testId } = req.params;
-
-        const test = await storage.getTest(testId);
-        if (!test) {
-          return res.status(404).json({ message: "Test not found" });
-        }
-
-        const attempt = await storage.createTestAttempt({
-          userId,
-          testId: test.id,
-        });
-
-        res.json({
-          attemptId: attempt.id,
-          message: "New attempt created successfully",
-        });
-      } catch (error: any) {
-        console.error("Error creating re-attempt:", error);
-        res
-          .status(500)
-          .json({ message: error.message || "Failed to create re-attempt" });
-      }
-    }
-  );
         res.json(result);
       } catch (error) {
         console.error("Error fetching results:", error);
@@ -551,4 +339,3 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   return httpServer;
 }
-
