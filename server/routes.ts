@@ -8,23 +8,25 @@ import bcrypt from "bcryptjs";
 import { isAuthenticated } from "./auth"; // Our new middleware
 
 export async function registerRoutes(app: Express): Promise<Server> {
-
   app.post("/api/auth/register", async (req, res, next) => {
     try {
       const { email, password, firstName, lastName } = req.body;
       if (!email || !password || !firstName) {
-        return res.status(400).json({ message: "Email, password, and first name are required." });
+        return res
+          .status(400)
+          .json({ message: "Email, password, and first name are required." });
       }
 
       const existingUser = await storage.getUserByEmail(email.toLowerCase());
       if (existingUser) {
-        return res.status(400).json({ message: "An account with this email already exists." });
+        return res
+          .status(400)
+          .json({ message: "An account with this email already exists." });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      
+
       const user = await storage.upsertUser({
-        id: undefined, // <-- Add this
         email: email.toLowerCase(),
         hashedPassword,
         firstName,
@@ -32,42 +34,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       req.login(user, (err) => {
-        if (err) { return next(err); }
+        if (err) {
+          return next(err);
+        }
         const { hashedPassword, ...userWithoutPassword } = user;
         res.json(userWithoutPassword);
       });
-
     } catch (error) {
       console.error("Error in /api/auth/register:", error);
       next(error);
     }
   });
 
-  app.post("/api/auth/login", passport.authenticate("local"), (req: any, res) => {
-    res.json(req.user);
-  });
+  app.post(
+    "/api/auth/login",
+    passport.authenticate("local"),
+    (req: any, res) => {
+      res.json(req.user);
+    }
+  );
 
   app.post("/api/auth/logout", (req, res, next) => {
     req.logout((err) => {
-      if (err) { return next(err); }
+      if (err) {
+        return next(err);
+      }
       req.session.destroy((destroyErr) => {
         if (destroyErr) {
           return next(destroyErr);
         }
-        res.clearCookie('connect.sid');
+        res.clearCookie("connect.sid");
         res.json({ message: "Logged out successfully" });
       });
     });
   });
 
-  app.get('/api/auth/user', (req: any, res) => {
+  app.get("/api/auth/user", (req: any, res) => {
     if (req.isAuthenticated()) {
       res.json(req.user);
     } else {
-      res.status(401).json(null); 
+      res.status(401).json(null);
     }
   });
-  
+
   app.post("/api/tests/generate", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.id;
@@ -83,8 +92,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const generatedQuestions = await generateMCQTest(data);
       const test = await storage.createTest({
-        userId, 
-        title: `${data.subject} - ${data.difficulty} ${data.company ? `(${data.company})` : ""}`,
+        userId,
+        title: `${data.subject} - ${data.difficulty} ${
+          data.company ? `(${data.company})` : ""
+        }`,
         company: data.company,
         subject: data.subject,
         difficulty: data.difficulty,
@@ -114,111 +125,135 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error generating test:", error);
-      res.status(500).json({ message: error.message || "Failed to generate test" });
+      res
+        .status(500)
+        .json({ message: error.message || "Failed to generate test" });
     }
   });
 
-  app.get("/api/attempts/:attemptId", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.id;
-      const { attemptId } = req.params;
+  app.get(
+    "/api/attempts/:attemptId",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { attemptId } = req.params;
 
-      const attempt = await storage.getTestAttempt(attemptId);
-      if (!attempt) {
-        return res.status(404).json({ message: "Test attempt not found" });
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+        if (attempt.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+
+        const test = await storage.getTest(attempt.testId);
+        if (!test) {
+          return res.status(404).json({ message: "Test not found" });
+        }
+
+        const questions = await storage.getQuestionsByTestId(test.id);
+
+        res.json({
+          attemptId: attempt.id,
+          testTitle: test.title,
+          questions,
+          startedAt: attempt.startedAt,
+        });
+      } catch (error) {
+        console.error("Error fetching test attempt:", error);
+        res.status(500).json({ message: "Failed to fetch test attempt" });
       }
-      if (attempt.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-
-      const test = await storage.getTest(attempt.testId);
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
-      }
-
-      const questions = await storage.getQuestionsByTestId(test.id);
-
-      res.json({
-        attemptId: attempt.id,
-        testTitle: test.title,
-        questions,
-        startedAt: attempt.startedAt,
-      });
-    } catch (error) {
-      console.error("Error fetching test attempt:", error);
-      res.status(500).json({ message: "Failed to fetch test attempt" });
     }
-  });
+  );
 
-  app.post("/api/attempts/:attemptId/submit", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.id;
-      const { attemptId } = req.params;
-      const schema = z.object({
-        answers: z.array(z.object({
-          questionId: z.string(),
-          selectedAnswer: z.number().min(0).max(3).nullable(),
-        })),
-        timeTaken: z.number(),
-      });
-      const { answers, timeTaken } = schema.parse(req.body);
+  app.post(
+    "/api/attempts/:attemptId/submit",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { attemptId } = req.params;
+        const schema = z.object({
+          answers: z.array(
+            z.object({
+              questionId: z.string(),
+              selectedAnswer: z.number().min(0).max(3).nullable(),
+            })
+          ),
+          timeTaken: z.number(),
+        });
+        const { answers, timeTaken } = schema.parse(req.body);
 
-      const attempt = await storage.getTestAttempt(attemptId);
-      if (!attempt) {
-        return res.status(404).json({ message: "Test attempt not found" });
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+        if (attempt.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+
+        const questions = await storage.getQuestionsByTestId(attempt.testId);
+        const questionMap = new Map(questions.map((q) => [q.id, q]));
+
+        let correctCount = 0;
+        const userAnswersData = answers.map((answer) => {
+          const question = questionMap.get(answer.questionId);
+          const isCorrect =
+            question && answer.selectedAnswer === question.correctAnswer;
+          if (isCorrect) correctCount++;
+
+          return {
+            attemptId,
+            questionId: answer.questionId,
+            selectedAnswer: answer.selectedAnswer,
+            isCorrect: isCorrect || false,
+          };
+        });
+
+        await storage.createUserAnswers(userAnswersData); // This uses the variable defined above
+
+        const percentage = Math.round((correctCount / questions.length) * 100);
+        const grade =
+          percentage >= 90
+            ? "A+"
+            : percentage >= 85
+            ? "A"
+            : percentage >= 80
+            ? "B+"
+            : percentage >= 75
+            ? "B"
+            : percentage >= 70
+            ? "C+"
+            : percentage >= 65
+            ? "C"
+            : percentage >= 60
+            ? "D"
+            : "F";
+
+        await storage.updateTestAttempt(attemptId, {
+          completedAt: new Date(),
+          score: correctCount,
+          percentage,
+          grade,
+          timeTaken,
+        });
+
+        res.json({
+          message: "Test submitted successfully",
+          score: correctCount,
+          percentage,
+          grade,
+        });
+      } catch (error: any) {
+        // This is the typo fix
+        console.error("Error submitting test:", error);
+        res
+          .status(500)
+          .json({ message: error.message || "Failed to submit test" });
       }
-      if (attempt.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      
-      const questions = await storage.getQuestionsByTestId(attempt.testId);
-      const questionMap = new Map(questions.map(q => [q.id, q]));
-
-      let correctCount = 0;
-      const userAnswersData = answers.map((answer) => {
-        const question = questionMap.get(answer.questionId);
-        const isCorrect = question && answer.selectedAnswer === question.correctAnswer;
-        if (isCorrect) correctCount++;
-
-        return {
-          attemptId,
-          questionId: answer.questionId,
-          selectedAnswer: answer.selectedAnswer,
-          isCorrect: isCorrect || false,
-        };
-      });
-
-      await storage.createUserAnswers(userAnswersData); // This uses the variable defined above
-
-      const percentage = Math.round((correctCount / questions.length) * 100);
-      const grade = 
-        percentage >= 90 ? "A+" :
-        percentage >= 85 ? "A" :
-        percentage >= 80 ? "B+" :
-        percentage >= 75 ? "B" :
-        percentage >= 70 ? "C+" :
-        percentage >= 65 ? "C" :
-        percentage >= 60 ? "D" : "F";
-
-      await storage.updateTestAttempt(attemptId, {
-        completedAt: new Date(),
-        score: correctCount,
-        percentage,
-        grade,
-        timeTaken,
-      });
-
-      res.json({
-        message: "Test submitted successfully",
-        score: correctCount,
-        percentage,
-        grade,
-      });
-    } catch (error: any) { // This is the typo fix
-      console.error("Error submitting test:", error);
-      res.status(500).json({ message: error.message || "Failed to submit test" });
     }
-  });
+  );
 
   app.get("/api/attempts", isAuthenticated, async (req: any, res) => {
     try {
@@ -231,50 +266,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/attempts/:attemptId/results", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.id;
-      const { attemptId } = req.params;
+  app.get(
+    "/api/attempts/:attemptId/results",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { attemptId } = req.params;
 
-      const result = await storage.getAttemptWithDetails(attemptId);
-      if (!result) {
-        return res.status(404).json({ message: "Test results not found" });
-      }
-      if (result.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
+        const result = await storage.getAttemptWithDetails(attemptId);
+        if (!result) {
+          return res.status(404).json({ message: "Test results not found" });
+        }
+        if (result.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
 
-      res.json(result);
-    } catch (error) {
-      console.error("Error fetching results:", error);
-      res.status(500).json({ message: "Failed to fetch test results" });
+        res.json(result);
+      } catch (error) {
+        console.error("Error fetching results:", error);
+        res.status(500).json({ message: "Failed to fetch test results" });
+      }
     }
-  });
+  );
 
-  app.post("/api/tests/:testId/reattempt", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.id;
-      const { testId } = req.params;
+  app.post(
+    "/api/tests/:testId/reattempt",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.id;
+        const { testId } = req.params;
 
-      const test = await storage.getTest(testId);
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
+        const test = await storage.getTest(testId);
+        if (!test) {
+          return res.status(404).json({ message: "Test not found" });
+        }
+
+        const attempt = await storage.createTestAttempt({
+          userId,
+          testId: test.id,
+        });
+
+        res.json({
+          attemptId: attempt.id,
+          message: "New attempt created successfully",
+        });
+      } catch (error: any) {
+        console.error("Error creating re-attempt:", error);
+        res
+          .status(500)
+          .json({ message: error.message || "Failed to create re-attempt" });
       }
-      
-      const attempt = await storage.createTestAttempt({
-        userId,
-        testId: test.id,
-      });
-
-      res.json({
-        attemptId: attempt.id,
-        message: "New attempt created successfully",
-      });
-    } catch (error: any) {
-      console.error("Error creating re-attempt:", error);
-      res.status(500).json({ message: error.message || "Failed to create re-attempt" });
     }
-  });
+  );
 
   const httpServer = createServer(app);
   return httpServer;
