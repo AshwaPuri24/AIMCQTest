@@ -50,7 +50,7 @@ function Router() {
         <Route path="/landing" component={Landing} />
         
         {/* Redirect all other paths to the landing page */}
-        <Route path="/:rest*">
+        <Route path="/*">
           <Redirect to="/landing" />
         </Route>
       </Switch>
