@@ -48,7 +48,12 @@ export default function Landing() {
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
               </Link>
-              <Button size="lg" variant="outline" className="text-base" data-testid="button-learn-more">
+              <Button size="lg" variant="outline" className="text-base" data-testid="button-learn-more" onClick={() => {
+                const featuresSection = document.getElementById("features");
+                if (featuresSection) {
+                  featuresSection.scrollIntoView({ behavior: "smooth" });
+                }
+              }}>
                 Learn More
               </Button>
             </div>
@@ -108,7 +113,7 @@ export default function Landing() {
       </section>
 
       {/* Features Section */}
-      <section className="bg-muted/50 py-20">
+      <section id="features" className="bg-muted/50 py-20">
         <div className="container mx-auto px-6">
           <div className="text-center space-y-4 mb-16">
             <h2 className="text-4xl font-bold">Powerful Features for Success</h2>
