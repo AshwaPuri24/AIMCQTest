@@ -5,3 +5,16 @@ server/public
 vite.config.ts.*
 *.tar.gz
 .env
+# Added by code-review-graph
+.code-review-graph/
+.mcp.json
+.opencode.json
+.windsurfrules
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+repomix-output.xml
+.cursorrules
+.claude
+.cursor
+.kiro

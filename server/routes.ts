@@ -5,6 +5,7 @@ import { generateMCQTest, type MCQQuestion } from "./openai"; // <-- Import MCQQ
 import { z } from "zod";
 import passport from "passport";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { isAuthenticated } from "./auth"; // Our new middleware
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -53,6 +54,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(req.user);
     }
   );
+
+  // SSO endpoint: validates a one-time ticket issued by GradPlacifyr.
+  // The frontend calls this after the user lands on /sso?ticket=...
+  app.post("/api/auth/sso", async (req, res, next) => {
+    try {
+      const { ticket } = req.body;
+      if (!ticket || typeof ticket !== "string") {
+        return res.status(400).json({ message: "Ticket is required." });
+      }
+
+      const verifyUrl = process.env.GRADPLACIFYR_VERIFY_URL!;
+      const apiKey = process.env.GRADPLACIFYR_INTERNAL_API_KEY!;
+
+      // Server-to-server call: ask GradPlacifyr whether the ticket is valid.
+      const gpResponse = await fetch(verifyUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Api-Key": apiKey,
+        },
+        body: JSON.stringify({ ticket }),
+      });
+
+      if (!gpResponse.ok) {
+        return res.status(401).json({ message: "Invalid or expired SSO ticket." });
+      }
+
+      const gpData = await gpResponse.json() as {
+        success: boolean;
+        user?: {
+          email?: string;
+          firstName?: string;
+          lastName?: string;
+        };
+      };
+
+      if (!gpData.success || !gpData.user?.email) {
+        return res.status(401).json({ message: "Invalid or expired SSO ticket." });
+      }
+
+      const email = gpData.user.email.toLowerCase();
+
+      // Look up the user in our local database; silently create one if absent.
+      let user = await storage.getUserByEmail(email);
+
+      if (!user) {
+        // SSO users never type this password — it exists only to satisfy the schema.
+        const randomHashedPassword = await bcrypt.hash(
+          crypto.randomBytes(32).toString("hex"),
+          10
+        );
+
+        user = await storage.upsertUser({
+          email,
+          hashedPassword: randomHashedPassword,
+          firstName: gpData.user.firstName || null,
+          lastName: gpData.user.lastName || null,
+        });
+      }
+
+      // Establish a local session (strip the hashed password before storing).
+      const { hashedPassword, ...userWithoutPassword } = user;
+      req.login(userWithoutPassword, (err) => {
+        if (err) return next(err);
+        res.json({ message: "SSO login successful", user: userWithoutPassword });
+      });
+    } catch (error) {
+      console.error("Error in /api/auth/sso:", error);
+      next(error);
+    }
+  });
 
   app.post("/api/auth/logout", (req, res, next) => {
     req.logout((err) => {
