@@ -116,9 +116,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Establish a local session (strip the hashed password before storing).
       const { hashedPassword, ...userWithoutPassword } = user;
-      req.login(userWithoutPassword, (err) => {
-        if (err) return next(err);
-        res.json({ message: "SSO login successful", user: userWithoutPassword });
+
+      // Defence-in-depth for Bug 2: if the incoming request already carries
+      // a session cookie belonging to a previous user (e.g. Student A left a
+      // cookie in the browser and Student B is now SSO-ing in), we must
+      // evict that identity before binding the new one. We:
+      //   1. req.logout — clears req.user / passport data
+      //   2. session.regenerate — issues a brand-new session ID so the old
+      //      cookie can never be replayed to impersonate the new user
+      //   3. req.login — attaches the SSO user to the fresh session
+      // This also prevents session-fixation attacks on the SSO endpoint.
+      const finishLogin = () => {
+        req.login(userWithoutPassword, (err) => {
+          if (err) return next(err);
+          res.json({ message: "SSO login successful", user: userWithoutPassword });
+        });
+      };
+
+      req.logout((logoutErr) => {
+        if (logoutErr) return next(logoutErr);
+        req.session.regenerate((regenErr) => {
+          if (regenErr) return next(regenErr);
+          finishLogin();
+        });
       });
     } catch (error) {
       console.error("Error in /api/auth/sso:", error);

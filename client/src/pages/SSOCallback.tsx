@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "wouter";
-import { queryClient } from "@/lib/queryClient";
 
 export default function SSOCallback() {
-  const [, setLocation] = useLocation();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,14 +26,18 @@ export default function SSOCallback() {
           throw new Error(data.message || "SSO verification failed.");
         }
 
-        // Invalidate the auth cache so useAuth picks up the new session
-        await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-        setLocation("/");
+        // Hard-navigate to the root so every piece of client state
+        // (React Query cache, auth hook, Router) is re-initialised
+        // from the freshly-issued session cookie. Using setLocation
+        // here raced with useAuth's refetch and caused the
+        // GradPlacifyrRedirect catch-all to fire before the
+        // authenticated render landed (Bug 1).
+        window.location.replace("/");
       } catch (err: any) {
         setError(err.message || "An unexpected error occurred during sign-in.");
       }
     })();
-  }, [setLocation]);
+  }, []);
 
   if (error) {
     return (

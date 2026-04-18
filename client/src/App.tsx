@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -36,15 +36,20 @@ function Router() {
     );
   }
 
+  // /sso must ALWAYS be handled by SSOCallback so a fresh ticket is
+  // exchanged with the server, even when an existing session cookie
+  // (e.g. for a previous user on the same browser) is already present.
+  // Previously, an authenticated user hitting /sso was bounced to "/"
+  // without ever sending the new ticket, which dropped Student B into
+  // Student A's dashboard (Bug 2).
   if (isAuthenticated) {
     return (
       <Switch>
+        <Route path="/sso" component={SSOCallback} />
         <Route path="/" component={Dashboard} />
         <Route path="/generate" component={GenerateTest} />
         <Route path="/test/:attemptId" component={TakeTest} />
         <Route path="/results/:attemptId" component={Results} />
-        {/* If already logged in, /sso just goes home */}
-        <Route path="/sso"><Redirect to="/" /></Route>
 
         {/* Authenticated 404 */}
         <Route component={NotFound} />
