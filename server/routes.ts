@@ -129,7 +129,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const finishLogin = () => {
         req.login(userWithoutPassword, (err) => {
           if (err) return next(err);
-          res.json({ message: "SSO login successful", user: userWithoutPassword });
+	  req.session.save((saveErr) => {
+	     if (saveErr) return next(saveErr);
+             res.json({ message: "SSO login successful", user: userWithoutPassword }); });
         });
       };
 

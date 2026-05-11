@@ -1,7 +1,9 @@
-
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY ?? "ollama",
+  baseURL: process.env.OPENAI_BASE_URL,
+});
 
 export interface MCQQuestion {
   questionNumber: number;
@@ -19,75 +21,119 @@ export interface GenerateTestRequest {
   context?: string;
 }
 
-export async function generateMCQTest(request: GenerateTestRequest): Promise<MCQQuestion[]> {
-  const prompt = `Generate ${request.numberOfQuestions} multiple-choice technical questions for the following:
+export async function generateMCQTest(
+  request: GenerateTestRequest,
+): Promise<MCQQuestion[]> {
+  const prompt = `Generate ${request.numberOfQuestions} multiple-choice technical questions.
+
 ${request.company ? `Company/Exam: ${request.company}` : ""}
 Subject: ${request.subject}
 Difficulty: ${request.difficulty}
 ${request.context ? `Additional Context: ${request.context}` : ""}
 
-Requirements:
-1. Create high-quality technical MCQs suitable for interview preparation
-2. Each question should have exactly 4 options
-3. Mark the correct answer (0-3 index)
-4. Provide detailed reasoning explaining why the correct answer is right
-5. Make questions progressively challenging for ${request.difficulty} level
-6. Focus on practical, real-world scenarios when possible
+Output a single JSON object with EXACTLY this shape — note this is just a SHAPE EXAMPLE about an unrelated topic; you must NOT include this example in your output:
 
-Return ONLY a JSON array in this exact format:
-[
-  {
-    "questionNumber": 1,
-    "questionText": "Question text here?",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "correctAnswer": 1,
-    "reasoning": "Detailed explanation of why this answer is correct..."
-  }
-]`;
+{
+  "questions": [
+    {
+      "questionNumber": 1,
+      "questionText": "<<<example only — replace with a real question on the requested subject>>>",
+      "options": [
+        "<<<option A text>>>",
+        "<<<option B text>>>",
+        "<<<option C text>>>",
+        "<<<option D text>>>"
+      ],
+      "correctAnswer": 0,
+      "reasoning": "<<<one or two sentence explanation>>>"
+    }
+  ]
+}
+
+Rules (follow strictly):
+- Exactly ${request.numberOfQuestions} items in "questions".
+- Each "options" array MUST have exactly 4 string entries.
+- "correctAnswer" MUST be an integer: 0, 1, 2, or 3 (index of the correct option).
+- "reasoning" MUST be one or two sentences explaining the correct answer.
+- "questionNumber" starts at 1, increments by 1.
+- Output ONLY the JSON object. No prose. No markdown fences. No commentary.`;
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-5",
+      model: process.env.OPENAI_MODEL || "llama3.2:3b",
+      temperature: 0.3,
+      max_tokens: 4096,
+      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: "You are an expert technical interviewer and educator. Generate high-quality, accurate technical MCQs with detailed explanations. Always respond with valid JSON only.",
+          content:
+            "You are an expert technical interviewer. Output ONLY valid JSON in the exact shape the user requests — never prose, never markdown.",
         },
-        {
-          role: "user",
-          content: prompt,
-        },
+        { role: "user", content: prompt },
       ],
-      response_format: { type: "json_object" },
-      max_completion_tokens: 8192,
     });
 
-    const content = response.choices[0].message.content;
+    const content = response.choices[0]?.message?.content;
     if (!content) {
-      throw new Error("No content received from OpenAI");
+      throw new Error("Empty response from model");
     }
 
-    // Parse the response - it might be wrapped in an object
-    const parsed = JSON.parse(content);
-    const questions = Array.isArray(parsed) ? parsed : parsed.questions || [];
-
-    if (!Array.isArray(questions) || questions.length === 0) {
-      throw new Error("Invalid response format from OpenAI");
+    let parsed: any;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      console.error("Model returned non-JSON. First 500 chars:", content.slice(0, 500));
+      throw new Error("Model output was not valid JSON");
     }
 
-    // Validate each question
-    questions.forEach((q: any, idx: number) => {
-      if (!q.questionText || !Array.isArray(q.options) || q.options.length !== 4) {
-        throw new Error(`Invalid question format at index ${idx}`);
-      }
-      if (typeof q.correctAnswer !== "number" || q.correctAnswer < 0 || q.correctAnswer > 3) {
-        throw new Error(`Invalid correct answer at index ${idx}`);
-      }
-    });
+    // The model may return one of several shapes; accept any.
+    const raw: any[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed.questions) ? parsed.questions
+      : Array.isArray(parsed.mcqs)      ? parsed.mcqs
+      : Array.isArray(parsed.data)      ? parsed.data
+      : [];
 
-    return questions as MCQQuestion[];
+    if (raw.length === 0) {
+      throw new Error("Model produced zero questions");
+    }
+
+    // Lenient: skip malformed entries instead of failing the whole batch.
+    const valid: MCQQuestion[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const q = raw[i];
+      const ok =
+        typeof q?.questionText === "string" &&
+        Array.isArray(q?.options) &&
+        q.options.length === 4 &&
+        q.options.every((o: any) => typeof o === "string") &&
+        typeof q?.correctAnswer === "number" &&
+        q.correctAnswer >= 0 &&
+        q.correctAnswer <= 3 &&
+        typeof q?.reasoning === "string";
+
+      if (ok) {
+        valid.push({
+          questionNumber: valid.length + 1,
+          questionText: q.questionText,
+          options: q.options,
+          correctAnswer: q.correctAnswer,
+          reasoning: q.reasoning,
+        });
+      } else {
+        console.warn(`Skipping malformed question at index ${i}:`, JSON.stringify(q).slice(0, 200));
+      }
+    }
+
+    if (valid.length === 0) {
+      throw new Error("No valid questions in model output");
+    }
+
+    return valid;
   } catch (error: any) {
-    console.error("OpenAI generation error:", error);
-    throw new Error(`Failed to generate test: ${error.message}`);
+    console.error("MCQ generation error:", error);
+    // Generic message bubbles up to client; full error stays in server logs (security)
+    throw new Error("Test generation failed");
   }
 }

@@ -5,6 +5,7 @@ import passport from "passport";
 import { sessionMiddleware } from "./auth";
 
 const app = express();
+app.set("trust proxy", 1);
 
 app.set("trust proxy", 1); // Trust first proxy
 app.use(sessionMiddleware);
