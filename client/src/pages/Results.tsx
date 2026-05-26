@@ -12,6 +12,8 @@ import { Link, useLocation } from "wouter";
 import type { AttemptWithDetails } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { Plus } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export default function Results({ params }: { params: { attemptId: string } }) {
   const { toast } = useToast();
@@ -244,7 +246,9 @@ const handleReattempt = () => {
                         <div className="flex-1">
                           <div className="font-medium">Question {index + 1}</div>
                           <div className="text-sm text-muted-foreground line-clamp-1">
-                            {question.questionText}
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {question.questionText}
+			    </ReactMarkdown>
                           </div>
                         </div>
                       </div>
@@ -254,7 +258,11 @@ const handleReattempt = () => {
                         {/* Question */}
                         <div>
                           <h4 className="font-semibold mb-2">Question:</h4>
-                          <p className="text-foreground leading-relaxed">{question.questionText}</p>
+                          <div className="text-foreground leading-relaxed prose prose-sm max-w-none dark:prose-invert">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {question.questionText}
+                            </ReactMarkdown>
+                          </div>
                         </div>
 
                         {/* Options */}
@@ -282,9 +290,13 @@ const handleReattempt = () => {
                                   {isUserAnswer && !isCorrectAnswer && (
                                     <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
                                   )}
-                                  <span className={isCorrectAnswer || isUserAnswer ? "font-medium" : ""}>
-                                    {option}
-                                  </span>
+                                  <div
+  className={`flex-1 prose prose-sm dark:prose-invert max-w-none [&_p]:my-0 [&_pre]:my-1 ${
+    isCorrectAnswer || isUserAnswer ? "font-medium" : ""
+  }`}
+>
+  <ReactMarkdown remarkPlugins={[remarkGfm]}>{option}</ReactMarkdown>
+</div>
                                   {isUserAnswer && (
                                     <Badge variant="outline" className="ml-auto">Your Answer</Badge>
                                   )}

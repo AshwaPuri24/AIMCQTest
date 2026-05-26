@@ -1,12 +1,33 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { generateMCQTest, type MCQQuestion } from "./openai"; // <-- Import MCQQuestion
+import { generateMCQTest, generateMCQTestBatched, type MCQQuestion } from "./openai";
 import { z } from "zod";
 import passport from "passport";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { isAuthenticated } from "./auth"; // Our new middleware
+import { randomUUID } from "crypto";
+
+type JobStatus = "pending" | "completed" | "failed";
+interface GenerationJob {
+  status: JobStatus;
+  userId: string;
+  progress: { current: number; total: number };
+  result?: { testId: string; attemptId: string };
+  error?: string;
+  createdAt: number;
+}
+
+const generationJobs = new Map<string, GenerationJob>();
+
+// Cleanup jobs older than 30 minutes to prevent memory growth
+setInterval(() => {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  for (const [id, job] of generationJobs.entries()) {
+    if (job.createdAt < cutoff) generationJobs.delete(id);
+  }
+}, 60 * 1000);
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/auth/register", async (req, res, next) => {
@@ -172,19 +193,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/tests/generate", isAuthenticated, async (req: any, res) => {
+  const userId = req.user.id;
+
+  const schema = z.object({
+    company: z.string().optional(),
+    subject: z.string().min(1),
+    difficulty: z.enum(["easy", "medium", "hard"]),
+    numberOfQuestions: z.number().min(5).max(50),
+    context: z.string().optional(),
+  });
+
+  const validation = schema.safeParse(req.body);
+  if (!validation.success) {
+    return res.status(400).json({ message: "Invalid input" });
+  }
+  const data = validation.data;
+
+  // Create a job and return its ID immediately. Generation runs in background.
+  const jobId = randomUUID();
+  generationJobs.set(jobId, {
+    status: "pending",
+    userId,
+    progress: { current: 0, total: data.numberOfQuestions },
+    createdAt: Date.now(),
+  });
+
+  res.json({ jobId, status: "pending" });
+
+  // Fire-and-forget background work. We're past the HTTP cycle now —
+  // Cloudflare's 100s limit is no longer relevant.
+  (async () => {
     try {
-      const userId = req.user.id;
+      const generatedQuestions = await generateMCQTestBatched(
+        data,
+        (count) => {
+          const job = generationJobs.get(jobId);
+          if (job) job.progress.current = count;
+        },
+      );
 
-      const schema = z.object({
-        company: z.string().optional(),
-        subject: z.string().min(1),
-        difficulty: z.enum(["easy", "medium", "hard"]),
-        numberOfQuestions: z.number().min(5).max(50),
-        context: z.string().optional(),
-      });
-      const data = schema.parse(req.body);
-
-      const generatedQuestions = await generateMCQTest(data);
       const test = await storage.createTest({
         userId,
         title: `${data.subject} - ${data.difficulty} ${
@@ -194,7 +241,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         subject: data.subject,
         difficulty: data.difficulty,
         context: data.context,
-        totalQuestions: data.numberOfQuestions,
+        totalQuestions: generatedQuestions.length,
       });
 
       const questionsData = generatedQuestions.map((q: MCQQuestion) => ({
@@ -212,18 +259,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         testId: test.id,
       });
 
-      res.json({
-        testId: test.id,
-        attemptId: attempt.id,
-        message: "Test generated successfully",
-      });
+      const job = generationJobs.get(jobId);
+      if (job) {
+        job.status = "completed";
+        job.result = { testId: test.id, attemptId: attempt.id };
+        job.progress.current = generatedQuestions.length;
+      }
     } catch (error: any) {
-      console.error("Error generating test:", error);
-      res
-        .status(500)
-        .json({ message: error.message || "Failed to generate test" });
+      console.error("Background generation error:", error);
+      const job = generationJobs.get(jobId);
+      if (job) {
+        job.status = "failed";
+        job.error = "Failed to generate test";
+      }
     }
+  })();
+});
+
+// Poll for job status
+app.get("/api/tests/generate/:jobId", isAuthenticated, (req: any, res) => {
+  const job = generationJobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ message: "Job not found or expired" });
+  }
+  if (job.userId !== req.user.id) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+
+  res.json({
+    status: job.status,
+    progress: job.progress,
+    ...(job.status === "completed" && { result: job.result }),
+    ...(job.status === "failed" && { message: job.error }),
   });
+});
+
+// Returns every test this user has ever generated, attempted or not.
+// Dashboard joins this against /api/attempts to show full history.
+app.get("/api/tests", isAuthenticated, async (req: any, res) => {
+  try {
+    const tests = await storage.getUserTests(req.user.id);
+    res.json(tests);
+  } catch (err) {
+    console.error("getUserTests error:", err);
+    res.status(500).json({ message: "Failed to load tests" });
+  }
+});
 
   app.get(
     "/api/attempts/:attemptId",

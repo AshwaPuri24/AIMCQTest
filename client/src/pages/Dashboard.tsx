@@ -35,30 +35,57 @@ export default function Dashboard() {
     queryKey: ["/api/attempts"],
     enabled: isAuthenticated,
   });
-  const bestAttempts = useMemo(() => {
-  if (attemptsLoading || !attempts) return [];
 
-  const testMap = new Map<string, AttemptWithTest>();
+  const { data: tests = [], isLoading: testsLoading } = useQuery<Test[]>({
+    queryKey: ["/api/tests"],
+    enabled: isAuthenticated,
+  });
 
-  for (const attempt of attempts) {
-    // Skip tests that were started but never completed
-    if (!attempt.completedAt) {
-      continue;
+  // One row per generated test, joined to the attempt that best represents it.
+  // Preference order for which attempt to show on the card:
+  //   1. Best *completed* attempt (highest percentage) — gives the user their best score.
+  //   2. Most recent in-progress attempt — so half-finished tests don't disappear.
+  //   3. null — test exists but was never started (auto-attempt creation failed, etc.).
+  type DashboardRow = { test: Test; attempt: AttemptWithTest | null };
+
+  const dashboardRows: DashboardRow[] = useMemo(() => {
+    if (attemptsLoading || testsLoading) return [];
+
+    // Bucket every attempt under its test ID so we don't do an O(n*m) scan below.
+    const byTest = new Map<string, AttemptWithTest[]>();
+    for (const a of attempts) {
+      const list = byTest.get(a.test.id) ?? [];
+      list.push(a);
+      byTest.set(a.test.id, list);
     }
 
-    const testId = attempt.test.id;
-    const existingAttempt = testMap.get(testId);
+    const pick = (list: AttemptWithTest[]): AttemptWithTest | null => {
+      if (list.length === 0) return null;
+      const completed = list.filter((a) => a.completedAt);
+      if (completed.length > 0) {
+        return completed.reduce((best, a) =>
+          (a.percentage || 0) > (best.percentage || 0) ? a : best
+        );
+      }
+      // No completed attempts → take the most recently started in-progress one.
+      return list.reduce((latest, a) =>
+        new Date(a.startedAt || 0).getTime() > new Date(latest.startedAt || 0).getTime()
+          ? a
+          : latest
+      );
+    };
 
-    // If we haven't seen this test, or if this attempt has a better score, save it
-    if (!existingAttempt || (attempt.percentage || 0) > (existingAttempt.percentage || 0)) {
-      testMap.set(testId, attempt);
-    }
-  }
-
-  // Return the best attempts, sorted by most recent
-  return Array.from(testMap.values())
-    .sort((a, b) => (new Date(b.startedAt || 0).getTime()) - (new Date(a.startedAt || 0).getTime()));
-  }, [attempts, attemptsLoading]);
+    // Drive off `tests` (the master list), not `attempts`, so tests with zero
+    // attempts still get a row.
+    return tests
+      .map((test) => ({ test, attempt: pick(byTest.get(test.id) ?? []) }))
+      .sort((a, b) => {
+        // Sort by most recent attempt activity; unattempted tests sink to the bottom.
+        const aTime = a.attempt ? new Date(a.attempt.startedAt || 0).getTime() : 0;
+        const bTime = b.attempt ? new Date(b.attempt.startedAt || 0).getTime() : 0;
+        return bTime - aTime;
+      });
+  }, [attempts, tests, attemptsLoading, testsLoading]);
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
@@ -222,7 +249,7 @@ export default function Dashboard() {
                   <div key={i} className="h-20 rounded-lg bg-muted animate-pulse"></div>
                 ))}
               </div>
-            ) : bestAttempts.length === 0 ? (
+            ) : dashboardRows.length === 0 ? (
               <div className="text-center py-12 space-y-4">
                 <div className="flex justify-center">
                   <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
@@ -244,28 +271,36 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-3">
-                {bestAttempts.map((attempt) => (
-                  <Link key={attempt.id} href={`/results/${attempt.id}`}>
-                    <Card className="hover-elevate active-elevate-2 cursor-pointer" data-testid={`card-attempt-${attempt.id}`}>
+                {dashboardRows.map(({ test, attempt }) => {
+                  const isCompleted = !!attempt?.completedAt;
+                  const isInProgress = !!attempt && !isCompleted;
+                  // Completed/in-progress attempts have a results page; unattempted
+                  // tests are non-clickable for now (auto-attempt creation should
+                  // mean this branch is rarely hit in practice).
+                  const card = (
+                    <Card
+                      className={`${attempt ? "hover-elevate active-elevate-2 cursor-pointer" : "opacity-80"}`}
+                      data-testid={`card-test-${test.id}`}
+                    >
                       <CardContent className="p-6">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="space-y-1 flex-1">
-                            <h4 className="font-semibold text-lg" data-testid={`text-test-title-${attempt.id}`}>
-                              {attempt.test.title}
+                            <h4 className="font-semibold text-lg" data-testid={`text-test-title-${test.id}`}>
+                              {test.title}
                             </h4>
                             <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-                              <span>{attempt.test.subject}</span>
+                              <span>{test.subject}</span>
                               <span>•</span>
-                              <span className="capitalize">{attempt.test.difficulty}</span>
+                              <span className="capitalize">{test.difficulty}</span>
                               <span>•</span>
-                              <span>{attempt.test.totalQuestions} questions</span>
+                              <span>{test.totalQuestions} questions</span>
                             </div>
                           </div>
                           <div className="flex items-center gap-6">
-                            {attempt.completedAt ? (
+                            {isCompleted && attempt ? (
                               <>
                                 <div className="text-right">
-                                  <div className="text-2xl font-bold" data-testid={`text-score-${attempt.id}`}>
+                                  <div className="text-2xl font-bold" data-testid={`text-score-${test.id}`}>
                                     {attempt.percentage}%
                                   </div>
                                   <div className="text-xs text-muted-foreground">
@@ -276,17 +311,28 @@ export default function Dashboard() {
                                   <Award className="h-6 w-6 text-primary" />
                                 </div>
                               </>
+                            ) : isInProgress ? (
+                              <div className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                                In Progress
+                              </div>
                             ) : (
                               <div className="text-sm text-muted-foreground">
-                                In Progress
+                                Not Started
                               </div>
                             )}
                           </div>
                         </div>
                       </CardContent>
                     </Card>
-                  </Link>
-                ))}
+                  );
+                  return attempt ? (
+                    <Link key={test.id} href={`/results/${attempt.id}`}>
+                      {card}
+                    </Link>
+                  ) : (
+                    <div key={test.id}>{card}</div>
+                  );
+                })}
               </div>
             )}
           </CardContent>

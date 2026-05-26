@@ -20,6 +20,8 @@ import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import type { Question } from "@shared/schema";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type TestData = {
   attemptId: string;
@@ -216,7 +218,11 @@ export default function TakeTest({ params }: { params: { attemptId: string } }) 
                 </span>
               </div>
               <p className="text-lg leading-relaxed" data-testid={`text-question-${currentQuestion.id}`}>
-                {currentQuestion.questionText}
+               <div className="prose prose-sm max-w-none dark:prose-invert">
+                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                   {currentQuestion.questionText}
+                 </ReactMarkdown>
+               </div>
               </p>
             </div>
 
@@ -246,9 +252,13 @@ export default function TakeTest({ params }: { params: { attemptId: string } }) 
                           <CheckCircle2 className="h-4 w-4 text-primary-foreground" />
                         )}
                       </div>
-                      <span className={isSelected ? "font-medium" : ""}>
-                        {option}
-                      </span>
+                      <div
+  className={`flex-1 prose prose-sm dark:prose-invert max-w-none [&_p]:my-0 [&_pre]:my-1 ${
+    isSelected ? "font-medium" : ""
+  }`}
+>
+  <ReactMarkdown remarkPlugins={[remarkGfm]}>{option}</ReactMarkdown>
+</div>
                     </div>
                   </button>
                 );

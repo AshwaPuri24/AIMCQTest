@@ -260,3 +260,21 @@
     inset: -1px;
   }
 }
+
+.prose code {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.prose pre {
+  background: #1e1e1e;
+  color: #e0e0e0;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.prose pre code {
+  background: transparent;
+  padding: 0;
+}
